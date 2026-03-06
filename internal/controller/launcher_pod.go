@@ -144,6 +144,13 @@ func buildEnvVars(sandbox *sandboxv1alpha1.Sandbox) []corev1.EnvVar {
 		})
 	}
 
+	if sandbox.Status.SnapshotID != "" {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "SNAPSHOT_ID",
+			Value: sandbox.Status.SnapshotID,
+		})
+	}
+
 	return envVars
 }
 

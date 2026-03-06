@@ -532,3 +532,242 @@ func TestDeletionTimestamp_KillingAndFinalizerRemoved(t *testing.T) {
 		}
 	}
 }
+
+// TestRunning_PauseRequested_Pausing verifies that setting spec.paused=true on a
+// Running sandbox transitions it to Pausing.
+func TestRunning_PauseRequested_Pausing(t *testing.T) {
+	startTime := metav1.Now()
+	sandbox := newSandbox("test-sbx", "default")
+	sandbox.Finalizers = []string{SandboxFinalizer}
+	sandbox.Spec.Paused = true
+	sandbox.Spec.Lifecycle.TimeoutSeconds = 3600
+	sandbox.Status.Phase = sandboxv1alpha1.SandboxPhaseRunning
+	sandbox.Status.StartTime = &startTime
+	sandbox.Status.PodName = launcherPodName("test-sbx")
+
+	pod := buildLauncherPod(sandbox)
+	pod.Status.Phase = corev1.PodRunning
+
+	r := newReconciler(t, sandbox, pod)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-sbx", Namespace: "default"}}
+
+	_, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := getSandbox(t, r, "test-sbx", "default")
+	if got.Status.Phase != sandboxv1alpha1.SandboxPhasePausing {
+		t.Errorf("expected phase Pausing, got %q", got.Status.Phase)
+	}
+}
+
+// TestPausing_DeletesPodAndTransitionsToPaused verifies that the Pausing phase
+// annotates and deletes the launcher Pod then transitions to Paused with a snapshot ID.
+func TestPausing_DeletesPodAndTransitionsToPaused(t *testing.T) {
+	sandbox := newSandbox("test-sbx", "default")
+	sandbox.Finalizers = []string{SandboxFinalizer}
+	sandbox.Spec.Paused = true
+	sandbox.Status.Phase = sandboxv1alpha1.SandboxPhasePausing
+	sandbox.Status.PodName = launcherPodName("test-sbx")
+
+	pod := buildLauncherPod(sandbox)
+	pod.Status.Phase = corev1.PodRunning
+
+	r := newReconciler(t, sandbox, pod)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-sbx", Namespace: "default"}}
+
+	_, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := getSandbox(t, r, "test-sbx", "default")
+	if got.Status.Phase != sandboxv1alpha1.SandboxPhasePaused {
+		t.Errorf("expected phase Paused, got %q", got.Status.Phase)
+	}
+	if got.Status.SnapshotID == "" {
+		t.Error("expected SnapshotID to be set")
+	}
+	if got.Status.PausedAt == nil {
+		t.Error("expected PausedAt to be set")
+	}
+
+	// Pod should have been deleted.
+	if _, ok := getPod(t, r, launcherPodName("test-sbx"), "default"); ok {
+		t.Errorf("expected launcher Pod to be deleted after pausing")
+	}
+}
+
+// TestPausing_NoPod_TransitionsToPaused verifies that the Pausing phase works
+// even when the launcher Pod is already gone.
+func TestPausing_NoPod_TransitionsToPaused(t *testing.T) {
+	sandbox := newSandbox("test-sbx", "default")
+	sandbox.Finalizers = []string{SandboxFinalizer}
+	sandbox.Spec.Paused = true
+	sandbox.Status.Phase = sandboxv1alpha1.SandboxPhasePausing
+	// No pod in the fake client.
+
+	r := newReconciler(t, sandbox)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-sbx", Namespace: "default"}}
+
+	_, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := getSandbox(t, r, "test-sbx", "default")
+	if got.Status.Phase != sandboxv1alpha1.SandboxPhasePaused {
+		t.Errorf("expected phase Paused, got %q", got.Status.Phase)
+	}
+	if got.Status.SnapshotID == "" {
+		t.Error("expected SnapshotID to be set")
+	}
+}
+
+// TestPaused_ResumeRequested_Resuming verifies that clearing spec.paused on a
+// Paused sandbox transitions it to Resuming.
+func TestPaused_ResumeRequested_Resuming(t *testing.T) {
+	pausedAt := metav1.Now()
+	sandbox := newSandbox("test-sbx", "default")
+	sandbox.Finalizers = []string{SandboxFinalizer}
+	sandbox.Spec.Paused = false // User clears the paused flag.
+	sandbox.Status.Phase = sandboxv1alpha1.SandboxPhasePaused
+	sandbox.Status.SnapshotID = "snap-test-sbx-1234567890"
+	sandbox.Status.PausedAt = &pausedAt
+
+	r := newReconciler(t, sandbox)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-sbx", Namespace: "default"}}
+
+	_, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := getSandbox(t, r, "test-sbx", "default")
+	if got.Status.Phase != sandboxv1alpha1.SandboxPhaseResuming {
+		t.Errorf("expected phase Resuming, got %q", got.Status.Phase)
+	}
+}
+
+// TestPaused_StillPaused_NoRequeue verifies that a Paused sandbox with spec.paused=true
+// stays in Paused and does not requeue.
+func TestPaused_StillPaused_NoRequeue(t *testing.T) {
+	pausedAt := metav1.Now()
+	sandbox := newSandbox("test-sbx", "default")
+	sandbox.Finalizers = []string{SandboxFinalizer}
+	sandbox.Spec.Paused = true
+	sandbox.Status.Phase = sandboxv1alpha1.SandboxPhasePaused
+	sandbox.Status.SnapshotID = "snap-test-sbx-1234567890"
+	sandbox.Status.PausedAt = &pausedAt
+
+	r := newReconciler(t, sandbox)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-sbx", Namespace: "default"}}
+
+	result, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RequeueAfter != 0 || result.Requeue {
+		t.Errorf("expected no requeue for a stable Paused sandbox, got %+v", result)
+	}
+
+	got := getSandbox(t, r, "test-sbx", "default")
+	if got.Status.Phase != sandboxv1alpha1.SandboxPhasePaused {
+		t.Errorf("expected phase Paused, got %q", got.Status.Phase)
+	}
+}
+
+// TestResuming_CreatesPodAndInitializing verifies that the Resuming phase creates
+// a new launcher Pod with SNAPSHOT_ID and advances to Initializing when scheduled.
+func TestResuming_CreatesPodAndInitializing(t *testing.T) {
+	pausedAt := metav1.Now()
+	sandbox := newSandbox("test-sbx", "default")
+	sandbox.Finalizers = []string{SandboxFinalizer}
+	sandbox.Spec.Paused = false
+	sandbox.Status.Phase = sandboxv1alpha1.SandboxPhaseResuming
+	sandbox.Status.SnapshotID = "snap-test-sbx-1234567890"
+	sandbox.Status.PausedAt = &pausedAt
+
+	r := newReconciler(t, sandbox)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-sbx", Namespace: "default"}}
+
+	// First reconcile: creates the Pod (not yet scheduled).
+	result, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RequeueAfter != requeueResuming {
+		t.Errorf("expected RequeueAfter=%v, got %v", requeueResuming, result.RequeueAfter)
+	}
+
+	podName := launcherPodName("test-sbx")
+	pod, ok := getPod(t, r, podName, "default")
+	if !ok {
+		t.Fatalf("expected launcher Pod to be created during Resuming")
+	}
+
+	// Verify SNAPSHOT_ID is injected.
+	snapshotEnvFound := false
+	for _, env := range pod.Spec.Containers[0].Env {
+		if env.Name == "SNAPSHOT_ID" && env.Value == "snap-test-sbx-1234567890" {
+			snapshotEnvFound = true
+		}
+	}
+	if !snapshotEnvFound {
+		t.Error("expected SNAPSHOT_ID env var to be set in resume launcher Pod")
+	}
+
+	// Simulate scheduler assigning the pod to a node.
+	pod.Spec.NodeName = "node-1"
+	if err := r.Update(context.Background(), pod); err != nil {
+		t.Fatalf("failed to update pod: %v", err)
+	}
+
+	// Second reconcile: detects node assignment and transitions to Initializing.
+	result, err = r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RequeueAfter != requeueInitializing {
+		t.Errorf("expected RequeueAfter=%v, got %v", requeueInitializing, result.RequeueAfter)
+	}
+
+	got := getSandbox(t, r, "test-sbx", "default")
+	if got.Status.Phase != sandboxv1alpha1.SandboxPhaseInitializing {
+		t.Errorf("expected phase Initializing, got %q", got.Status.Phase)
+	}
+	if got.Status.NodeName != "node-1" {
+		t.Errorf("expected NodeName node-1, got %q", got.Status.NodeName)
+	}
+}
+
+// TestBuildEnvVars_WithSnapshotID verifies that SNAPSHOT_ID is injected when set in status.
+func TestBuildEnvVars_WithSnapshotID(t *testing.T) {
+	sandbox := newSandbox("test-sbx", "default")
+	sandbox.Status.SnapshotID = "snap-test-sbx-1234567890"
+
+	envVars := buildEnvVars(sandbox)
+
+	got := make(map[string]string, len(envVars))
+	for _, e := range envVars {
+		got[e.Name] = e.Value
+	}
+
+	if got["SNAPSHOT_ID"] != "snap-test-sbx-1234567890" {
+		t.Errorf("expected SNAPSHOT_ID=snap-test-sbx-1234567890, got %q", got["SNAPSHOT_ID"])
+	}
+}
+
+// TestBuildEnvVars_NoSnapshotID verifies that SNAPSHOT_ID is not injected when status is empty.
+func TestBuildEnvVars_NoSnapshotID(t *testing.T) {
+	sandbox := newSandbox("test-sbx", "default")
+
+	envVars := buildEnvVars(sandbox)
+
+	for _, e := range envVars {
+		if e.Name == "SNAPSHOT_ID" {
+			t.Errorf("expected SNAPSHOT_ID to be absent when SnapshotID is empty, but found it")
+		}
+	}
+}

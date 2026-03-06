@@ -1,0 +1,15 @@
+# Build artifacts
+bin/
+cover.out
+
+# Test cache
+testcache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store

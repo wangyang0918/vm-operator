@@ -1,0 +1,220 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: sandboxes.sandbox.e2b.io
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.1
+spec:
+  group: sandbox.e2b.io
+  names:
+    kind: Sandbox
+    listKind: SandboxList
+    plural: sandboxes
+    shortNames:
+    - sbx
+    singular: sandbox
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.nodeName
+      name: Node
+      type: string
+    - jsonPath: .status.podName
+      name: Pod
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Sandbox is the Schema for the sandboxes API.
+        properties:
+          apiVersion:
+            description: APIVersion defines the versioned schema of this representation
+              of an object.
+            type: string
+          kind:
+            description: Kind is a string value representing the REST resource this
+              object represents.
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: SandboxSpec defines the desired state of Sandbox.
+            properties:
+              lifecycle:
+                description: Lifecycle defines lifecycle policies.
+                properties:
+                  timeoutSeconds:
+                    default: 300
+                    description: TimeoutSeconds is the maximum duration the sandbox
+                      may run before being killed.
+                    format: int64
+                    type: integer
+                type: object
+              resources:
+                description: Resources defines the compute resources for the MicroVM.
+                properties:
+                  diskMB:
+                    default: 2048
+                    description: DiskMB is the disk size in megabytes.
+                    format: int32
+                    type: integer
+                  hugePages:
+                    default: false
+                    description: HugePages enables huge page memory support.
+                    type: boolean
+                  memoryMB:
+                    default: 512
+                    description: MemoryMB is the memory size in megabytes.
+                    format: int32
+                    maximum: 65536
+                    minimum: 128
+                    type: integer
+                  vcpu:
+                    default: 2
+                    description: VCPU is the number of virtual CPUs.
+                    format: int32
+                    maximum: 64
+                    minimum: 1
+                    type: integer
+                required:
+                - memoryMB
+                - vcpu
+                type: object
+              runtime:
+                description: Runtime defines optional runtime configuration.
+                properties:
+                  firecrackerVersion:
+                    description: FirecrackerVersion specifies the Firecracker binary
+                      version to use.
+                    type: string
+                  kernelVersion:
+                    description: KernelVersion specifies the kernel version to use.
+                    type: string
+                type: object
+              sandboxMetadata:
+                additionalProperties:
+                  type: string
+                description: SandboxMetadata is user-defined metadata attached to
+                  the sandbox.
+                type: object
+              scheduling:
+                description: Scheduling defines scheduling constraints.
+                properties:
+                  nodeName:
+                    description: NodeName specifies the exact node on which to run
+                      the launcher Pod.
+                    type: string
+                  nodeSelector:
+                    additionalProperties:
+                      type: string
+                    description: NodeSelector is a map of key-value pairs for node
+                      selection.
+                    type: object
+                type: object
+              template:
+                description: Template contains the template information.
+                properties:
+                  baseTemplateID:
+                    description: BaseTemplateID is the base template identifier.
+                    type: string
+                  templateID:
+                    description: TemplateID is the required template identifier.
+                    type: string
+                required:
+                - templateID
+                type: object
+            required:
+            - resources
+            type: object
+          status:
+            description: SandboxStatus defines the observed state of Sandbox.
+            properties:
+              conditions:
+                description: Conditions contains the current service state of the
+                  Sandbox.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: lastTransitionTime is the last time the condition
+                        transitioned from one status to another.
+                      format: date-time
+                      type: string
+                    message:
+                      description: message is a human readable message indicating
+                        details about the transition.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: observedGeneration represents the .metadata.generation
+                        that the condition was set based upon.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: reason contains a programmatic identifier indicating
+                        the reason for the condition's last transition.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              endTime:
+                description: EndTime is the projected end time based on timeout.
+                format: date-time
+                type: string
+              nodeName:
+                description: NodeName is the name of the node where the sandbox is
+                  running.
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation observed
+                  by the controller.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is the current lifecycle phase of the Sandbox.
+                type: string
+              podName:
+                description: PodName is the name of the launcher Pod.
+                type: string
+              startTime:
+                description: StartTime is the time when the sandbox became Running.
+                format: date-time
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

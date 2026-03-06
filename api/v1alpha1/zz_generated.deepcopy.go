@@ -151,6 +151,10 @@ func (in *SandboxStatus) DeepCopyInto(out *SandboxStatus) {
 		in, out := &in.EndTime, &out.EndTime
 		*out = (*in).DeepCopy()
 	}
+	if in.PausedAt != nil {
+		in, out := &in.PausedAt, &out.PausedAt
+		*out = (*in).DeepCopy()
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]v1.Condition, len(*in))

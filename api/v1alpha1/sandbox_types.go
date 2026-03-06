@@ -16,10 +16,22 @@ const (
 	SandboxPhaseInitializing SandboxPhase = "Initializing"
 	// SandboxPhaseRunning means the MicroVM is running.
 	SandboxPhaseRunning SandboxPhase = "Running"
+	// SandboxPhasePausing means the Sandbox is saving a VM snapshot and stopping the launcher Pod.
+	SandboxPhasePausing SandboxPhase = "Pausing"
+	// SandboxPhasePaused means the VM snapshot has been saved and the launcher Pod has been deleted.
+	SandboxPhasePaused SandboxPhase = "Paused"
+	// SandboxPhaseResuming means a new launcher Pod is being created from the saved snapshot.
+	SandboxPhaseResuming SandboxPhase = "Resuming"
 	// SandboxPhaseKilling means the Sandbox is being terminated.
 	SandboxPhaseKilling SandboxPhase = "Killing"
 	// SandboxPhaseFailed means the Sandbox has encountered an unrecoverable error.
 	SandboxPhaseFailed SandboxPhase = "Failed"
+)
+
+// Condition type constants for Sandbox status conditions.
+const (
+	// ConditionTypeSnapshotReady indicates that a VM snapshot has been successfully taken.
+	ConditionTypeSnapshotReady = "SnapshotReady"
 )
 
 // TemplateSpec defines the template information for a Sandbox.
@@ -115,6 +127,10 @@ type SandboxSpec struct {
 	// SandboxMetadata is user-defined metadata attached to the sandbox.
 	// +optional
 	SandboxMetadata map[string]string `json:"sandboxMetadata,omitempty"`
+
+	// Paused indicates whether the sandbox should be paused.
+	// +optional
+	Paused bool `json:"paused,omitempty"`
 }
 
 // SandboxStatus defines the observed state of Sandbox.
@@ -138,6 +154,14 @@ type SandboxStatus struct {
 	// EndTime is the projected end time based on timeout.
 	// +optional
 	EndTime *metav1.Time `json:"endTime,omitempty"`
+
+	// SnapshotID is the identifier of the VM snapshot taken when pausing.
+	// +optional
+	SnapshotID string `json:"snapshotId,omitempty"`
+
+	// PausedAt is the time when the sandbox was paused.
+	// +optional
+	PausedAt *metav1.Time `json:"pausedAt,omitempty"`
 
 	// Conditions contains the current service state of the Sandbox.
 	// +optional

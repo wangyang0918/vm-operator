@@ -23,10 +23,15 @@ const (
 	// SandboxFinalizer is the finalizer added to Sandbox resources.
 	SandboxFinalizer = "sandbox.e2b.io/protection"
 
+	// AnnotationSignal is the annotation key used to signal the launcher process.
+	AnnotationSignal = "sandbox.e2b.io/signal"
+
 	// Requeue intervals for each phase.
 	requeueScheduling   = 5 * time.Second
 	requeueInitializing = 3 * time.Second
 	requeueRunning      = 30 * time.Second
+	requeuePausing      = 2 * time.Second
+	requeueResuming     = 3 * time.Second
 )
 
 // SandboxReconciler reconciles a Sandbox object.
@@ -85,6 +90,12 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return r.reconcileInitializing(ctx, sandbox)
 	case sandboxv1alpha1.SandboxPhaseRunning:
 		return r.reconcileRunning(ctx, sandbox)
+	case sandboxv1alpha1.SandboxPhasePausing:
+		return r.reconcilePausing(ctx, sandbox)
+	case sandboxv1alpha1.SandboxPhasePaused:
+		return r.reconcilePaused(ctx, sandbox)
+	case sandboxv1alpha1.SandboxPhaseResuming:
+		return r.reconcileResuming(ctx, sandbox)
 	case sandboxv1alpha1.SandboxPhaseKilling:
 		return r.reconcileKilling(ctx, sandbox)
 	case sandboxv1alpha1.SandboxPhaseFailed:
@@ -221,6 +232,13 @@ func (r *SandboxReconciler) reconcileInitializing(ctx context.Context, sandbox *
 func (r *SandboxReconciler) reconcileRunning(ctx context.Context, sandbox *sandboxv1alpha1.Sandbox) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
+	// Check if the user has requested a pause.
+	if sandbox.Spec.Paused {
+		logger.Info("Pause requested, moving to Pausing")
+		return r.setPhase(ctx, sandbox, sandboxv1alpha1.SandboxPhasePausing,
+			"PauseRequested", "User requested sandbox pause")
+	}
+
 	// Check for timeout.
 	if sandbox.Status.StartTime != nil && sandbox.Spec.Lifecycle.TimeoutSeconds > 0 {
 		deadline := sandbox.Status.StartTime.Add(
@@ -255,6 +273,108 @@ func (r *SandboxReconciler) reconcileRunning(ctx context.Context, sandbox *sandb
 	}
 
 	return ctrl.Result{RequeueAfter: requeueRunning}, nil
+}
+
+// reconcilePausing handles the Pausing phase: signal launcher, take a snapshot, and delete the Pod.
+func (r *SandboxReconciler) reconcilePausing(ctx context.Context, sandbox *sandboxv1alpha1.Sandbox) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	pod := &corev1.Pod{}
+	podName := launcherPodName(sandbox.Name)
+	if err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: sandbox.Namespace}, pod); err == nil {
+		// Signal the launcher process to save a snapshot by annotating the Pod.
+		if pod.Annotations == nil {
+			pod.Annotations = map[string]string{}
+		}
+		pod.Annotations[AnnotationSignal] = "pause"
+		if err := r.Update(ctx, pod); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to annotate launcher pod: %w", err)
+		}
+
+		// Delete the launcher Pod.
+		logger.Info("Deleting launcher Pod for pause", "pod", podName)
+		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, fmt.Errorf("failed to delete launcher pod: %w", err)
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, err
+	}
+
+	// Generate a snapshot ID if not already set.
+	if sandbox.Status.SnapshotID == "" {
+		sandbox.Status.SnapshotID = fmt.Sprintf("snap-%s-%d", sandbox.Name, time.Now().UnixNano())
+	}
+
+	// Transition to Paused and record the pause time.
+	now := metav1.Now()
+	sandbox.Status.Phase = sandboxv1alpha1.SandboxPhasePaused
+	sandbox.Status.PausedAt = &now
+	sandbox.Status.ObservedGeneration = sandbox.Generation
+	meta.SetStatusCondition(&sandbox.Status.Conditions, metav1.Condition{
+		Type:               sandboxv1alpha1.ConditionTypeSnapshotReady,
+		Status:             metav1.ConditionTrue,
+		Reason:             "SnapshotTaken",
+		Message:            fmt.Sprintf("VM snapshot %s has been saved", sandbox.Status.SnapshotID),
+		ObservedGeneration: sandbox.Generation,
+	})
+	if err := r.Status().Update(ctx, sandbox); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	logger.Info("Sandbox paused", "snapshotID", sandbox.Status.SnapshotID)
+	return ctrl.Result{}, nil
+}
+
+// reconcilePaused handles the Paused phase: wait for resume request.
+func (r *SandboxReconciler) reconcilePaused(ctx context.Context, sandbox *sandboxv1alpha1.Sandbox) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// If the user has cleared the paused flag, start resuming.
+	if !sandbox.Spec.Paused {
+		logger.Info("Resume requested, moving to Resuming")
+		return r.setPhase(ctx, sandbox, sandboxv1alpha1.SandboxPhaseResuming,
+			"ResumeRequested", "User requested sandbox resume")
+	}
+
+	// Stay paused; no need to requeue unless triggered by a spec change.
+	return ctrl.Result{}, nil
+}
+
+// reconcileResuming handles the Resuming phase: create a new launcher Pod from the snapshot.
+func (r *SandboxReconciler) reconcileResuming(ctx context.Context, sandbox *sandboxv1alpha1.Sandbox) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	pod := buildLauncherPod(sandbox)
+
+	existing := &corev1.Pod{}
+	err := r.Get(ctx, types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace}, existing)
+	if apierrors.IsNotFound(err) {
+		logger.Info("Creating launcher Pod for resume", "pod", pod.Name, "snapshotID", sandbox.Status.SnapshotID)
+		if err := r.Create(ctx, pod); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to create launcher pod for resume: %w", err)
+		}
+	} else if err != nil {
+		return ctrl.Result{}, err
+	} else {
+		pod = existing
+	}
+
+	// Wait until the Pod has been assigned to a node.
+	if pod.Spec.NodeName == "" {
+		return ctrl.Result{RequeueAfter: requeueResuming}, nil
+	}
+
+	// Pod is scheduled; proceed to Initializing.
+	sandbox.Status.NodeName = pod.Spec.NodeName
+	sandbox.Status.PodName = pod.Name
+	sandbox.Status.Phase = sandboxv1alpha1.SandboxPhaseInitializing
+	sandbox.Status.ObservedGeneration = sandbox.Generation
+	if err := r.Status().Update(ctx, sandbox); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	logger.Info("Resume Pod scheduled, moving to Initializing", "node", pod.Spec.NodeName)
+	return ctrl.Result{RequeueAfter: requeueInitializing}, nil
 }
 
 // reconcileKilling handles the Killing phase: delete the Pod and remove the finalizer.

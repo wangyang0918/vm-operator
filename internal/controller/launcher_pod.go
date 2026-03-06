@@ -66,7 +66,7 @@ func buildLauncherPod(sandbox *sandboxv1alpha1.Sandbox) *corev1.Pod {
 				{
 					Name:  "sandbox-launcher",
 					Image: LauncherImage,
-					Env: buildEnvVars(sandbox),
+					Env:   buildEnvVars(sandbox),
 					SecurityContext: &corev1.SecurityContext{
 						Privileged: &privileged,
 					},

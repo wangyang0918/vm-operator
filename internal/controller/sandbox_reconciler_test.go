@@ -263,6 +263,233 @@ func TestRunning_Timeout_Killing(t *testing.T) {
 	}
 }
 
+// TestInitializing_PodRunning_Running verifies that a Running pod during
+// Initializing moves the Sandbox to Running and records StartTime/EndTime.
+func TestInitializing_PodRunning_Running(t *testing.T) {
+	sandbox := newSandbox("test-sbx", "default")
+	sandbox.Finalizers = []string{SandboxFinalizer}
+	sandbox.Status.Phase = sandboxv1alpha1.SandboxPhaseInitializing
+	sandbox.Status.PodName = launcherPodName("test-sbx")
+
+	pod := buildLauncherPod(sandbox)
+	pod.Status.Phase = corev1.PodRunning
+
+	r := newReconciler(t, sandbox, pod)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-sbx", Namespace: "default"}}
+
+	result, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RequeueAfter != requeueRunning {
+		t.Errorf("expected RequeueAfter=%v, got %v", requeueRunning, result.RequeueAfter)
+	}
+
+	got := getSandbox(t, r, "test-sbx", "default")
+	if got.Status.Phase != sandboxv1alpha1.SandboxPhaseRunning {
+		t.Errorf("expected phase Running, got %q", got.Status.Phase)
+	}
+	if got.Status.StartTime == nil {
+		t.Error("expected StartTime to be set")
+	}
+	if got.Status.EndTime == nil {
+		t.Error("expected EndTime to be set (timeout configured)")
+	}
+}
+
+// TestInitializing_PodFailed_Failed verifies that a Failed pod during
+// Initializing moves the Sandbox to Failed.
+func TestInitializing_PodFailed_Failed(t *testing.T) {
+	sandbox := newSandbox("test-sbx", "default")
+	sandbox.Finalizers = []string{SandboxFinalizer}
+	sandbox.Status.Phase = sandboxv1alpha1.SandboxPhaseInitializing
+	sandbox.Status.PodName = launcherPodName("test-sbx")
+
+	pod := buildLauncherPod(sandbox)
+	pod.Status.Phase = corev1.PodFailed
+
+	r := newReconciler(t, sandbox, pod)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-sbx", Namespace: "default"}}
+
+	_, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := getSandbox(t, r, "test-sbx", "default")
+	if got.Status.Phase != sandboxv1alpha1.SandboxPhaseFailed {
+		t.Errorf("expected phase Failed, got %q", got.Status.Phase)
+	}
+}
+
+// TestInitializing_PodNotFound_RevertsPending verifies that a missing pod
+// during Initializing reverts the Sandbox to Pending.
+func TestInitializing_PodNotFound_RevertsPending(t *testing.T) {
+	sandbox := newSandbox("test-sbx", "default")
+	sandbox.Finalizers = []string{SandboxFinalizer}
+	sandbox.Status.Phase = sandboxv1alpha1.SandboxPhaseInitializing
+	sandbox.Status.PodName = launcherPodName("test-sbx")
+	// No pod added to the fake client.
+
+	r := newReconciler(t, sandbox)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-sbx", Namespace: "default"}}
+
+	_, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := getSandbox(t, r, "test-sbx", "default")
+	if got.Status.Phase != sandboxv1alpha1.SandboxPhasePending {
+		t.Errorf("expected phase Pending, got %q", got.Status.Phase)
+	}
+}
+
+// TestInitializing_PodPending_Requeues verifies that a still-pending pod
+// during Initializing causes a requeue without phase change.
+func TestInitializing_PodPending_Requeues(t *testing.T) {
+	sandbox := newSandbox("test-sbx", "default")
+	sandbox.Finalizers = []string{SandboxFinalizer}
+	sandbox.Status.Phase = sandboxv1alpha1.SandboxPhaseInitializing
+	sandbox.Status.PodName = launcherPodName("test-sbx")
+
+	pod := buildLauncherPod(sandbox)
+	pod.Status.Phase = corev1.PodPending
+
+	r := newReconciler(t, sandbox, pod)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-sbx", Namespace: "default"}}
+
+	result, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RequeueAfter != requeueInitializing {
+		t.Errorf("expected RequeueAfter=%v, got %v", requeueInitializing, result.RequeueAfter)
+	}
+
+	got := getSandbox(t, r, "test-sbx", "default")
+	if got.Status.Phase != sandboxv1alpha1.SandboxPhaseInitializing {
+		t.Errorf("expected phase Initializing, got %q", got.Status.Phase)
+	}
+}
+
+// TestRunning_PodMissing_Failed verifies that a missing launcher Pod during
+// Running moves the Sandbox to Failed.
+func TestRunning_PodMissing_Failed(t *testing.T) {
+	pastTime := metav1.NewTime(time.Now().Add(-10 * time.Second))
+	sandbox := newSandbox("test-sbx", "default")
+	sandbox.Finalizers = []string{SandboxFinalizer}
+	sandbox.Status.Phase = sandboxv1alpha1.SandboxPhaseRunning
+	sandbox.Status.StartTime = &pastTime
+	sandbox.Status.PodName = launcherPodName("test-sbx")
+	// No pod in the fake client.
+
+	r := newReconciler(t, sandbox)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-sbx", Namespace: "default"}}
+
+	_, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := getSandbox(t, r, "test-sbx", "default")
+	if got.Status.Phase != sandboxv1alpha1.SandboxPhaseFailed {
+		t.Errorf("expected phase Failed, got %q", got.Status.Phase)
+	}
+}
+
+// TestRunning_PodTerminated_Killing verifies that a terminated (Succeeded or
+// Failed) launcher Pod during Running moves the Sandbox to Killing.
+func TestRunning_PodTerminated_Killing(t *testing.T) {
+	for _, podPhase := range []corev1.PodPhase{corev1.PodFailed, corev1.PodSucceeded} {
+		t.Run(string(podPhase), func(t *testing.T) {
+			pastTime := metav1.NewTime(time.Now().Add(-1 * time.Second))
+			sandbox := newSandbox("test-sbx", "default")
+			sandbox.Finalizers = []string{SandboxFinalizer}
+			// Use a long timeout so we don't hit the timeout path.
+			sandbox.Spec.Lifecycle.TimeoutSeconds = 3600
+			sandbox.Status.Phase = sandboxv1alpha1.SandboxPhaseRunning
+			sandbox.Status.StartTime = &pastTime
+			sandbox.Status.PodName = launcherPodName("test-sbx")
+
+			pod := buildLauncherPod(sandbox)
+			pod.Status.Phase = podPhase
+
+			r := newReconciler(t, sandbox, pod)
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-sbx", Namespace: "default"}}
+
+			_, err := r.Reconcile(context.Background(), req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			got := getSandbox(t, r, "test-sbx", "default")
+			if got.Status.Phase != sandboxv1alpha1.SandboxPhaseKilling {
+				t.Errorf("expected phase Killing, got %q", got.Status.Phase)
+			}
+		})
+	}
+}
+
+// TestRunning_NoTimeout_Requeues verifies that a Running sandbox without an
+// expired timeout requeues after requeueRunning.
+func TestRunning_NoTimeout_Requeues(t *testing.T) {
+	startTime := metav1.Now()
+	sandbox := newSandbox("test-sbx", "default")
+	sandbox.Finalizers = []string{SandboxFinalizer}
+	sandbox.Spec.Lifecycle.TimeoutSeconds = 3600
+	sandbox.Status.Phase = sandboxv1alpha1.SandboxPhaseRunning
+	sandbox.Status.StartTime = &startTime
+	sandbox.Status.PodName = launcherPodName("test-sbx")
+
+	pod := buildLauncherPod(sandbox)
+	pod.Status.Phase = corev1.PodRunning
+
+	r := newReconciler(t, sandbox, pod)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-sbx", Namespace: "default"}}
+
+	result, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RequeueAfter != requeueRunning {
+		t.Errorf("expected RequeueAfter=%v, got %v", requeueRunning, result.RequeueAfter)
+	}
+}
+
+// TestBuildEnvVars_OptionalFields verifies that optional fields are included
+// in the launcher Pod environment when set.
+func TestBuildEnvVars_OptionalFields(t *testing.T) {
+	sandbox := newSandbox("test-sbx", "default")
+	sandbox.Spec.Template.BaseTemplateID = "base-tpl-001"
+	sandbox.Spec.Runtime.KernelVersion = "5.10.186"
+	sandbox.Spec.Runtime.FirecrackerVersion = "1.7.0"
+	sandbox.Spec.Resources.HugePages = true
+
+	envVars := buildEnvVars(sandbox)
+
+	want := map[string]string{
+		"SANDBOX_NAME":        "test-sbx",
+		"SANDBOX_NAMESPACE":   "default",
+		"TEMPLATE_ID":         "tpl-001",
+		"BASE_TEMPLATE_ID":    "base-tpl-001",
+		"KERNEL_VERSION":      "5.10.186",
+		"FIRECRACKER_VERSION": "1.7.0",
+		"HUGE_PAGES":          "true",
+	}
+
+	got := make(map[string]string, len(envVars))
+	for _, e := range envVars {
+		got[e.Name] = e.Value
+	}
+
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("env %q: expected %q, got %q", k, v, got[k])
+		}
+	}
+}
+
 // TestDeletionTimestamp_KillingAndFinalizerRemoved verifies that setting a
 // DeletionTimestamp moves the Sandbox to Killing and removes the finalizer.
 func TestDeletionTimestamp_KillingAndFinalizerRemoved(t *testing.T) {

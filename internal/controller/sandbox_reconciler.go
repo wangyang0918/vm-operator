@@ -24,9 +24,9 @@ const (
 	SandboxFinalizer = "sandbox.e2b.io/protection"
 
 	// Requeue intervals for each phase.
-	requeueScheduling    = 5 * time.Second
-	requeueInitializing  = 3 * time.Second
-	requeueRunning       = 30 * time.Second
+	requeueScheduling   = 5 * time.Second
+	requeueInitializing = 3 * time.Second
+	requeueRunning      = 30 * time.Second
 )
 
 // SandboxReconciler reconciles a Sandbox object.

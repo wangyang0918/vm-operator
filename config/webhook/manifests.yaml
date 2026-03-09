@@ -1,0 +1,63 @@
+---
+# ValidatingWebhookConfiguration for the Sandbox CRD.
+#
+# Prerequisites:
+#   - cert-manager installed in the cluster (https://cert-manager.io/docs/installation/).
+#   - The cert-manager annotation below causes the CA bundle to be injected automatically.
+#
+# If you are not using cert-manager, replace the `caBundle` placeholder with your own base64-encoded
+# CA certificate and remove the cert-manager annotation.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: vm-operator-validating-webhook-configuration
+  annotations:
+    # cert-manager injects the CA bundle into caBundle fields marked with this annotation.
+    cert-manager.io/inject-ca-from: vm-operator-system/vm-operator-serving-cert
+spec:
+  webhooks:
+    - name: vsandbox.kb.io
+      admissionReviewVersions:
+        - v1
+      clientConfig:
+        service:
+          name: vm-operator-webhook-service
+          namespace: vm-operator-system
+          path: /validate-sandbox-e2b-io-v1alpha1-sandbox
+          port: 443
+      failurePolicy: Fail
+      rules:
+        - apiGroups:
+            - sandbox.e2b.io
+          apiVersions:
+            - v1alpha1
+          operations:
+            - CREATE
+            - UPDATE
+          resources:
+            - sandboxes
+      sideEffects: None
+---
+# Certificate issued by cert-manager for the webhook server TLS.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: vm-operator-serving-cert
+  namespace: vm-operator-system
+spec:
+  dnsNames:
+    - vm-operator-webhook-service.vm-operator-system.svc
+    - vm-operator-webhook-service.vm-operator-system.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: vm-operator-selfsigned-issuer
+  secretName: vm-operator-webhook-server-cert
+---
+# Self-signed Issuer used to generate the webhook server certificate.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: vm-operator-selfsigned-issuer
+  namespace: vm-operator-system
+spec:
+  selfSigned: {}

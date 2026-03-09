@@ -73,6 +73,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = sandboxv1alpha1.SetupSandboxWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to set up webhook", "webhook", "Sandbox")
+		os.Exit(1)
+	}
+
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)

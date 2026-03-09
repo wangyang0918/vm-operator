@@ -1,0 +1,17 @@
+---
+# Service exposes the webhook server running inside the operator manager pod.
+apiVersion: v1
+kind: Service
+metadata:
+  name: vm-operator-webhook-service
+  namespace: vm-operator-system
+  labels:
+    control-plane: controller-manager
+spec:
+  ports:
+    - name: https
+      port: 443
+      protocol: TCP
+      targetPort: 9443
+  selector:
+    control-plane: controller-manager

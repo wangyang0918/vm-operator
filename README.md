@@ -101,9 +101,12 @@ Running ──► Pausing ──► Paused ──► Resuming ──► Initiali
 
 **Metrics (Prometheus)** – The operator registers and exposes 7 Prometheus metrics; see [Metrics](#metrics-prometheus).
 
-### P3 – Roadmap
+### P3 – Webhook Validation ✅
 
-- Webhook validation for Sandbox spec fields
+The operator includes a `ValidatingWebhook` for the Sandbox CRD that enforces business rules at admission time, before any controller logic runs. See [Admission Webhook](#admission-webhook) for full details and setup instructions.
+
+### P3 – Roadmap (future)
+
 - Multi-cluster support
 - Horizontal Pod Autoscaler integration for launcher Pods
 - Network policy per-sandbox isolation
@@ -507,11 +510,130 @@ A: Scrape `:8080/metrics` on the operator Pod. Seven custom Prometheus metrics c
 **Q: Can I run this without Firecracker (for testing)?**  
 A: The operator itself is not coupled to Firecracker. It creates launcher Pods with a configurable image (`LauncherImage` constant in `launcher_pod.go`). You can substitute a mock launcher image during development to test the state machine without requiring KVM.
 
+## Admission Webhook
+
+The operator ships a **ValidatingWebhook** for the `Sandbox` CRD that rejects requests violating business rules before they reach the controller.
+
+### Validation rules
+
+| Field | Rule |
+|-------|------|
+| `spec.template.templateID` | Required; must be non-empty |
+| `spec.resources.vcpu` | Must be between **1** and **64** (inclusive) |
+| `spec.resources.memoryMB` | Must be between **128** and **65536** MiB (inclusive) |
+| `spec.resources.diskMB` | When provided (non-zero), must be at least **512** MiB |
+| `spec.runtime.firecrackerVersion` | When provided, must be a valid version string (e.g. `v1.3.3`, `1.4.0-dev`) |
+| `spec.runtime.kernelVersion` | When provided, must be a valid version string (e.g. `5.10.68`) |
+| `spec.lifecycle.timeoutSeconds` | Must be **≥ 0** |
+| `spec.paused` (pause request) | `paused: false → true` only allowed when phase is **Running** |
+| `spec.paused` (resume request) | `paused: true → false` only allowed when phase is **Paused** or **Pausing** |
+
+### Enabling the webhook
+
+The webhook server is embedded in the operator manager binary. To activate it in a cluster:
+
+1. **Install cert-manager** (required for TLS certificate provisioning):
+
+   ```bash
+   kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+   kubectl -n cert-manager wait --for=condition=Available deployment --all --timeout=120s
+   ```
+
+2. **Apply the webhook Service and ValidatingWebhookConfiguration**:
+
+   ```bash
+   kubectl apply -f config/webhook/service.yaml
+   kubectl apply -f config/webhook/manifests.yaml
+   ```
+
+   This creates:
+   - A `Service` that routes port 443 → 9443 (the operator's webhook server port) in namespace `vm-operator-system`.
+   - A `ValidatingWebhookConfiguration` that intercepts `CREATE` and `UPDATE` operations on `Sandbox` resources.
+   - A cert-manager `Certificate` and self-signed `Issuer` that provision a TLS certificate for the server.
+
+3. **Mount the TLS certificate** in the operator Deployment by patching `manager.yaml` to add the secret volume:
+
+   ```yaml
+   volumes:
+     - name: webhook-cert
+       secret:
+         secretName: vm-operator-webhook-server-cert
+   containers:
+     - name: manager
+       volumeMounts:
+         - mountPath: /tmp/k8s-webhook-server/serving-certs
+           name: webhook-cert
+           readOnly: true
+   ```
+
+4. **Restart the operator**:
+
+   ```bash
+   kubectl -n vm-operator-system rollout restart deployment vm-operator-controller-manager
+   ```
+
+### Example validation cases
+
+**✅ Accepted – valid Sandbox**:
+```yaml
+apiVersion: sandbox.e2b.io/v1alpha1
+kind: Sandbox
+metadata:
+  name: my-sandbox
+spec:
+  template:
+    templateID: tpl-001
+  resources:
+    vcpu: 2
+    memoryMB: 512
+    diskMB: 2048
+  runtime:
+    firecrackerVersion: v1.3.3
+    kernelVersion: 5.10.68
+  lifecycle:
+    timeoutSeconds: 300
+```
+
+**❌ Rejected – vCPU out of range**:
+```yaml
+spec:
+  resources:
+    vcpu: 128   # must be between 1 and 64
+    memoryMB: 512
+```
+Error: `spec.resources.vcpu: Invalid value: 128: must be between 1 and 64`
+
+**❌ Rejected – missing templateID**:
+```yaml
+spec:
+  template: {}   # templateID is required
+  resources:
+    vcpu: 2
+    memoryMB: 512
+```
+Error: `spec.template.templateID: Required value: templateID is required`
+
+**❌ Rejected – invalid version string**:
+```yaml
+spec:
+  runtime:
+    firecrackerVersion: "latest"   # not a valid version format
+```
+Error: `spec.runtime.firecrackerVersion: Invalid value: "latest": must be a valid version string (e.g. v1.3.3, 5.10.68)`
+
+**❌ Rejected – pause from non-Running phase**:
+```yaml
+# The sandbox is currently in Pending phase; pausing is not allowed yet.
+spec:
+  paused: true
+```
+Error: `spec.paused: Forbidden: cannot pause sandbox in phase "Pending"; sandbox must be Running`
+
 ## Roadmap
 
 - **P0** ✅ Core state machine: Pending → Scheduling → Initializing → Running → Killing
 - **P1** ✅ Pause / Resume with VM snapshot support
 - **P1** ✅ Sandbox metrics (Prometheus)
-- **P3** Webhook validation for Sandbox spec
+- **P3** ✅ Webhook validation for Sandbox spec
 - **P3** Multi-cluster support
 - **P3** Network policy per-sandbox isolation

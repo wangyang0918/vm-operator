@@ -7,6 +7,54 @@ on:
     branches: [main]
 
 jobs:
+  commit-convention:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate commit author and Co-authored-by trailer
+        shell: bash
+        run: |
+          EXPECTED_EMAIL="danrtsey.wy@alibaba-inc.com"
+          TRAILER="Co-authored-by: Copilot <198982749+Copilot@users.noreply.github.com>"
+          ERRORS=0
+
+          # For pull_request events, check commits in the PR; for push events, check HEAD.
+          if [[ "${{ github.event_name }}" = "pull_request" ]]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+            COMMITS=$(git --no-pager log "${BASE}..${HEAD}" --format="%H")
+          else
+            COMMITS=$(git --no-pager log -1 --format="%H")
+          fi
+
+          for SHA in $COMMITS; do
+            AUTHOR_EMAIL=$(git --no-pager log -1 --format="%ae" "$SHA")
+            MSG=$(git --no-pager log -1 --format="%B" "$SHA")
+
+            if [ "$AUTHOR_EMAIL" != "$EXPECTED_EMAIL" ]; then
+              echo "::error::Commit $SHA has unexpected author email: $AUTHOR_EMAIL (expected $EXPECTED_EMAIL)"
+              ERRORS=$((ERRORS + 1))
+            fi
+
+            if ! echo "$MSG" | grep -qF "$TRAILER"; then
+              echo "::error::Commit $SHA is missing trailer: $TRAILER"
+              ERRORS=$((ERRORS + 1))
+            fi
+          done
+
+          if [ "$ERRORS" -gt 0 ]; then
+            echo ""
+            echo "Run 'bash scripts/setup-git.sh' to configure your local git."
+            exit 1
+          fi
+          echo "All commits pass author and co-authoring convention checks."
+
+
   test:
     runs-on: ubuntu-latest
     permissions:

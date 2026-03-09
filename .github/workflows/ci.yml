@@ -33,6 +33,13 @@ jobs:
           fi
 
           for SHA in $COMMITS; do
+            # Only enforce the convention on commits where .gitmessage already
+            # exists in the tree (i.e., the convention had been established).
+            if ! git --no-pager show "${SHA}:.gitmessage" &>/dev/null; then
+              echo "Skipping $SHA: convention not yet established in this commit"
+              continue
+            fi
+
             AUTHOR_EMAIL=$(git --no-pager log -1 --format="%ae" "$SHA")
             MSG=$(git --no-pager log -1 --format="%B" "$SHA")
 

@@ -30,9 +30,6 @@ jobs:
           git config user.name "Yang Wang"
           git config user.email "danrtsey.wy@alibaba-inc.com"
 
-      - name: Make helper script executable
-        run: chmod +x scripts/rewrite-commit-msg.sh
-
       - name: Create branch and rewrite commit history
         env:
           TARGET_BRANCH: ${{ inputs.target_branch }}
@@ -40,6 +37,20 @@ jobs:
           TARGET_NAME: "Yang Wang"
           TARGET_EMAIL: "danrtsey.wy@alibaba-inc.com"
         run: |
+          echo "==> Writing commit-message rewrite helper to /tmp..."
+          cat > /tmp/rewrite-commit-msg.sh << 'MSGFILTER'
+#!/bin/sh
+COAUTHOR="Co-authored-by: Copilot <198982749+Copilot@users.noreply.github.com>"
+msg=$(cat)
+stripped=$(printf '%s' "$msg" | sed 's/[[:space:]]*$//')
+if printf '%s' "$stripped" | grep -qF "$COAUTHOR"; then
+    printf '%s\n' "$stripped"
+else
+    printf '%s\n\n%s\n' "$stripped" "$COAUTHOR"
+fi
+MSGFILTER
+          chmod +x /tmp/rewrite-commit-msg.sh
+
           echo "==> Creating branch '$TARGET_BRANCH' from '$SOURCE_BRANCH'..."
           git checkout -b "$TARGET_BRANCH"
 
@@ -51,7 +62,7 @@ jobs:
               export GIT_COMMITTER_NAME='$TARGET_NAME'
               export GIT_COMMITTER_EMAIL='$TARGET_EMAIL'
             " \
-            --msg-filter "$(pwd)/scripts/rewrite-commit-msg.sh" \
+            --msg-filter "/tmp/rewrite-commit-msg.sh" \
             HEAD
 
           echo "==> Verifying rewritten history..."

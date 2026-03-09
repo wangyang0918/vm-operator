@@ -216,12 +216,6 @@ func TestNewSandboxMetrics_RegistersAllMetrics(t *testing.T) {
 		t.Fatal("NewSandboxMetrics returned nil")
 	}
 
-	// Gather all metrics and verify we have 7 metric families registered.
-	mfs, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("Gather() error: %v", err)
-	}
-
 	wantNames := map[string]bool{
 		"sandbox_operator_sandboxes_by_phase":      true,
 		"sandbox_operator_sandbox_runtime_seconds": true,
@@ -241,7 +235,7 @@ func TestNewSandboxMetrics_RegistersAllMetrics(t *testing.T) {
 	m.RecordError("default", "PodFailed")
 	m.RecordRuntime("sbx", "default", time.Now().Add(-1*time.Second))
 
-	mfs, err = reg.Gather()
+	mfs, err := reg.Gather()
 	if err != nil {
 		t.Fatalf("Gather() error after recording: %v", err)
 	}

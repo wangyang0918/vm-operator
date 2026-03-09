@@ -720,7 +720,8 @@ func TestResuming_CreatesPodAndInitializing(t *testing.T) {
 
 	// Simulate scheduler assigning the pod to a node.
 	pod.Spec.NodeName = "node-1"
-	if err := r.Update(context.Background(), pod); err != nil {
+	err = r.Update(context.Background(), pod)
+	if err != nil {
 		t.Fatalf("failed to update pod: %v", err)
 	}
 

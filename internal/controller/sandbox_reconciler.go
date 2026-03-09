@@ -127,7 +127,8 @@ func (r *SandboxReconciler) reconcilePending(ctx context.Context, sandbox *sandb
 	err := r.Get(ctx, types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace}, existing)
 	if apierrors.IsNotFound(err) {
 		logger.Info("Creating launcher Pod", "pod", pod.Name)
-		if err := r.Create(ctx, pod); err != nil {
+		err = r.Create(ctx, pod)
+		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to create launcher pod: %w", err)
 		}
 	} else if err != nil {
@@ -281,7 +282,8 @@ func (r *SandboxReconciler) reconcilePausing(ctx context.Context, sandbox *sandb
 
 	pod := &corev1.Pod{}
 	podName := launcherPodName(sandbox.Name)
-	if err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: sandbox.Namespace}, pod); err == nil {
+	getErr := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: sandbox.Namespace}, pod)
+	if getErr == nil {
 		// Signal the launcher process to save a snapshot by annotating the Pod.
 		if pod.Annotations == nil {
 			pod.Annotations = map[string]string{}
@@ -296,8 +298,8 @@ func (r *SandboxReconciler) reconcilePausing(ctx context.Context, sandbox *sandb
 		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, fmt.Errorf("failed to delete launcher pod: %w", err)
 		}
-	} else if !apierrors.IsNotFound(err) {
-		return ctrl.Result{}, err
+	} else if !apierrors.IsNotFound(getErr) {
+		return ctrl.Result{}, getErr
 	}
 
 	// Generate a snapshot ID if not already set.
@@ -350,7 +352,8 @@ func (r *SandboxReconciler) reconcileResuming(ctx context.Context, sandbox *sand
 	err := r.Get(ctx, types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace}, existing)
 	if apierrors.IsNotFound(err) {
 		logger.Info("Creating launcher Pod for resume", "pod", pod.Name, "snapshotID", sandbox.Status.SnapshotID)
-		if err := r.Create(ctx, pod); err != nil {
+		err = r.Create(ctx, pod)
+		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to create launcher pod for resume: %w", err)
 		}
 	} else if err != nil {
@@ -383,13 +386,14 @@ func (r *SandboxReconciler) reconcileKilling(ctx context.Context, sandbox *sandb
 
 	pod := &corev1.Pod{}
 	podName := launcherPodName(sandbox.Name)
-	if err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: sandbox.Namespace}, pod); err == nil {
+	getErr := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: sandbox.Namespace}, pod)
+	if getErr == nil {
 		logger.Info("Deleting launcher Pod", "pod", podName)
 		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, fmt.Errorf("failed to delete launcher pod: %w", err)
 		}
-	} else if !apierrors.IsNotFound(err) {
-		return ctrl.Result{}, err
+	} else if !apierrors.IsNotFound(getErr) {
+		return ctrl.Result{}, getErr
 	}
 
 	// Remove finalizer only after Pod is gone.

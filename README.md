@@ -32,12 +32,12 @@ The operator does **not** run the VM directly. Instead, for each `Sandbox` CR it
 
 ```
 New CR ──► Pending ──► Scheduling ──► Initializing ──► Running
-                          │                               │
-                          │ (Unschedulable)               │ (timeout / Pod gone)
-                          ▼                               ▼
-                        Failed                         Killing ──► (finalizer removed)
-                                                          ▲
-                                              DeletionTimestamp set (any phase)
+                           │                               │
+                           │ (Unschedulable)               │ (timeout / Pod gone)
+                           ▼                               ▼
+                         Failed                         Killing ──► (finalizer removed)
+                                                           ▲
+                                               DeletionTimestamp set (any phase)
 ```
 
 | Phase          | Trigger                               | Requeue    |
@@ -48,6 +48,84 @@ New CR ──► Pending ──► Scheduling ──► Initializing ──► R
 | `Running`      | Pod phase = Running                   | 30 s       |
 | `Killing`      | Timeout OR DeletionTimestamp set      | immediate  |
 | `Failed`       | Pod Unschedulable OR Pod Failed       | —          |
+
+## Metrics (Prometheus)
+
+The operator exposes Prometheus metrics on **`:8080/metrics`** (configurable via `--metrics-bind-address`). No sidecar is required — the metrics server is embedded in the operator process via controller-runtime.
+
+### Exported Metrics
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `sandbox_operator_sandboxes_by_phase` | Gauge | `phase` | Number of sandboxes currently in each lifecycle phase (`Pending`, `Scheduling`, `Initializing`, `Running`, `Pausing`, `Paused`, `Resuming`, `Killing`, `Failed`). |
+| `sandbox_operator_sandbox_runtime_seconds` | Gauge | `sandbox`, `namespace` | Seconds elapsed since a sandbox entered the Running state. Cleared when the sandbox leaves Running. |
+| `sandbox_operator_launcher_success_total` | Counter | `namespace` | Total launcher pods that successfully reached the Running state. |
+| `sandbox_operator_launcher_failure_total` | Counter | `namespace` | Total launcher pods that failed to start (Unschedulable or PodFailed). |
+| `sandbox_operator_pause_total` | Counter | `namespace` | Total sandbox pause operations. |
+| `sandbox_operator_resume_total` | Counter | `namespace` | Total sandbox resume operations. |
+| `sandbox_operator_error_total` | Counter | `namespace`, `reason` | Total transitions to the Failed phase, labelled by failure reason (e.g. `PodFailed`, `Unschedulable`, `PodMissing`). |
+
+Controller-runtime also exposes standard Go runtime, process, and controller reconciliation metrics at the same endpoint.
+
+### Prometheus Scrape Configuration
+
+```yaml
+scrape_configs:
+  - job_name: vm-operator
+    static_configs:
+      - targets: ["<operator-pod-ip>:8080"]
+```
+
+### Prometheus Operator ServiceMonitor
+
+If you use the [Prometheus Operator](https://github.com/prometheus-operator/prometheus-operator), create a `ServiceMonitor` alongside a `Service` that exposes the metrics port:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: vm-operator-metrics
+  namespace: vm-operator-system
+  labels:
+    app: vm-operator
+spec:
+  ports:
+    - name: metrics
+      port: 8080
+      targetPort: 8080
+  selector:
+    app: vm-operator
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: vm-operator
+  namespace: vm-operator-system
+spec:
+  selector:
+    matchLabels:
+      app: vm-operator
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+```
+
+### Example Queries
+
+```promql
+# Sandboxes currently running
+sandbox_operator_sandboxes_by_phase{phase="Running"}
+
+# Launcher failure rate over the last 5 minutes
+rate(sandbox_operator_launcher_failure_total[5m])
+
+# Average sandbox runtime
+avg(sandbox_operator_sandbox_runtime_seconds)
+
+# Pause operations per namespace
+sum by (namespace) (sandbox_operator_pause_total)
+```
 
 ## Quick Start
 
@@ -126,7 +204,9 @@ vm-operator/
 ├── internal/controller/
 │   ├── sandbox_reconciler.go    # State machine reconciler
 │   ├── launcher_pod.go          # Launcher Pod builder
-│   └── sandbox_reconciler_test.go
+│   ├── metrics.go               # Prometheus metrics registration & helpers
+│   ├── sandbox_reconciler_test.go
+│   └── metrics_test.go
 ├── go.mod
 ├── Makefile
 └── README.md
@@ -135,7 +215,7 @@ vm-operator/
 ## Roadmap
 
 - **P0** ✅ Core state machine: Pending → Scheduling → Initializing → Running → Killing
-- **P1** Sandbox metrics (Prometheus)
+- **P1** ✅ Sandbox metrics (Prometheus)
 - **P1** Webhook validation for Sandbox spec
 - **P2** Multi-cluster support
 - **P2** Snapshot/restore support for MicroVM state

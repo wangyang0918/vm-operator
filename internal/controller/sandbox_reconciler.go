@@ -42,7 +42,8 @@ const (
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 type SandboxReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme  *runtime.Scheme
+	Metrics *SandboxMetrics
 }
 
 // SetupWithManager registers the controller with the given manager.
@@ -109,11 +110,13 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 // setPhasePending transitions the sandbox to Pending phase.
 func (r *SandboxReconciler) setPhasePending(ctx context.Context, sandbox *sandboxv1alpha1.Sandbox) (ctrl.Result, error) {
+	oldPhase := sandbox.Status.Phase
 	sandbox.Status.Phase = sandboxv1alpha1.SandboxPhasePending
 	sandbox.Status.ObservedGeneration = sandbox.Generation
 	if err := r.Status().Update(ctx, sandbox); err != nil {
 		return ctrl.Result{}, err
 	}
+	r.Metrics.RecordPhaseTransition(oldPhase, sandboxv1alpha1.SandboxPhasePending)
 	return ctrl.Result{}, nil
 }
 
@@ -141,6 +144,7 @@ func (r *SandboxReconciler) reconcilePending(ctx context.Context, sandbox *sandb
 	if err := r.Status().Update(ctx, sandbox); err != nil {
 		return ctrl.Result{}, err
 	}
+	r.Metrics.RecordPhaseTransition(sandboxv1alpha1.SandboxPhasePending, sandboxv1alpha1.SandboxPhaseScheduling)
 	return ctrl.Result{RequeueAfter: requeueScheduling}, nil
 }
 
@@ -178,6 +182,7 @@ func (r *SandboxReconciler) reconcileScheduling(ctx context.Context, sandbox *sa
 		if err := r.Status().Update(ctx, sandbox); err != nil {
 			return ctrl.Result{}, err
 		}
+		r.Metrics.RecordPhaseTransition(sandboxv1alpha1.SandboxPhaseScheduling, sandboxv1alpha1.SandboxPhaseInitializing)
 		return ctrl.Result{RequeueAfter: requeueInitializing}, nil
 	}
 
@@ -217,6 +222,8 @@ func (r *SandboxReconciler) reconcileInitializing(ctx context.Context, sandbox *
 		if err := r.Status().Update(ctx, sandbox); err != nil {
 			return ctrl.Result{}, err
 		}
+		r.Metrics.RecordPhaseTransition(sandboxv1alpha1.SandboxPhaseInitializing, sandboxv1alpha1.SandboxPhaseRunning)
+		r.Metrics.RecordLauncherSuccess(sandbox.Namespace)
 		return ctrl.Result{RequeueAfter: requeueRunning}, nil
 	}
 
@@ -273,6 +280,11 @@ func (r *SandboxReconciler) reconcileRunning(ctx context.Context, sandbox *sandb
 			"PodTerminated", fmt.Sprintf("Launcher Pod entered %s phase", pod.Status.Phase))
 	}
 
+	// Update the runtime gauge with elapsed time since the sandbox started.
+	if sandbox.Status.StartTime != nil {
+		r.Metrics.RecordRuntime(sandbox.Name, sandbox.Namespace, sandbox.Status.StartTime.Time)
+	}
+
 	return ctrl.Result{RequeueAfter: requeueRunning}, nil
 }
 
@@ -322,6 +334,7 @@ func (r *SandboxReconciler) reconcilePausing(ctx context.Context, sandbox *sandb
 	if err := r.Status().Update(ctx, sandbox); err != nil {
 		return ctrl.Result{}, err
 	}
+	r.Metrics.RecordPhaseTransition(sandboxv1alpha1.SandboxPhasePausing, sandboxv1alpha1.SandboxPhasePaused)
 
 	logger.Info("Sandbox paused", "snapshotID", sandbox.Status.SnapshotID)
 	return ctrl.Result{}, nil
@@ -375,6 +388,7 @@ func (r *SandboxReconciler) reconcileResuming(ctx context.Context, sandbox *sand
 	if err := r.Status().Update(ctx, sandbox); err != nil {
 		return ctrl.Result{}, err
 	}
+	r.Metrics.RecordPhaseTransition(sandboxv1alpha1.SandboxPhaseResuming, sandboxv1alpha1.SandboxPhaseInitializing)
 
 	logger.Info("Resume Pod scheduled, moving to Initializing", "node", pod.Spec.NodeName)
 	return ctrl.Result{RequeueAfter: requeueInitializing}, nil
@@ -410,10 +424,15 @@ func (r *SandboxReconciler) reconcileKilling(ctx context.Context, sandbox *sandb
 // reconcileDelete handles deletion when DeletionTimestamp is set.
 func (r *SandboxReconciler) reconcileDelete(ctx context.Context, sandbox *sandboxv1alpha1.Sandbox) (ctrl.Result, error) {
 	if sandbox.Status.Phase != sandboxv1alpha1.SandboxPhaseKilling {
+		oldPhase := sandbox.Status.Phase
 		sandbox.Status.Phase = sandboxv1alpha1.SandboxPhaseKilling
 		sandbox.Status.ObservedGeneration = sandbox.Generation
 		if err := r.Status().Update(ctx, sandbox); err != nil {
 			return ctrl.Result{}, err
+		}
+		r.Metrics.RecordPhaseTransition(oldPhase, sandboxv1alpha1.SandboxPhaseKilling)
+		if oldPhase == sandboxv1alpha1.SandboxPhaseRunning {
+			r.Metrics.ClearRuntime(sandbox.Name, sandbox.Namespace)
 		}
 	}
 	return r.reconcileKilling(ctx, sandbox)
@@ -426,6 +445,7 @@ func (r *SandboxReconciler) setPhase(
 	phase sandboxv1alpha1.SandboxPhase,
 	reason, message string,
 ) (ctrl.Result, error) {
+	oldPhase := sandbox.Status.Phase
 	sandbox.Status.Phase = phase
 	sandbox.Status.ObservedGeneration = sandbox.Generation
 
@@ -443,6 +463,25 @@ func (r *SandboxReconciler) setPhase(
 
 	if err := r.Status().Update(ctx, sandbox); err != nil {
 		return ctrl.Result{}, err
+	}
+
+	// Record phase transition and derived metrics.
+	r.Metrics.RecordPhaseTransition(oldPhase, phase)
+	switch phase {
+	case sandboxv1alpha1.SandboxPhaseFailed:
+		r.Metrics.RecordError(sandbox.Namespace, reason)
+		// Launcher failures are those that prevented the pod from starting.
+		if reason == "PodFailed" || reason == "Unschedulable" {
+			r.Metrics.RecordLauncherFailure(sandbox.Namespace)
+		}
+	case sandboxv1alpha1.SandboxPhasePausing:
+		r.Metrics.RecordPause(sandbox.Namespace)
+	case sandboxv1alpha1.SandboxPhaseResuming:
+		r.Metrics.RecordResume(sandbox.Namespace)
+	}
+	// Clear runtime gauge when the sandbox stops running.
+	if oldPhase == sandboxv1alpha1.SandboxPhaseRunning {
+		r.Metrics.ClearRuntime(sandbox.Name, sandbox.Namespace)
 	}
 
 	// If we just moved to Killing, kick off the killing logic immediately.

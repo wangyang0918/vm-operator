@@ -1,0 +1,73 @@
+name: Fix Author History
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: 'Name of the new branch to create with rewritten history'
+        required: false
+        default: 'fix-author-history'
+      source_branch:
+        description: 'Source branch whose history will be rewritten'
+        required: false
+        default: 'main'
+
+jobs:
+  fix-author-history:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository with full history
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_branch }}
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "Yang Wang"
+          git config user.email "danrtsey.wy@alibaba-inc.com"
+
+      - name: Make helper script executable
+        run: chmod +x scripts/rewrite-commit-msg.sh
+
+      - name: Create branch and rewrite commit history
+        env:
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+          TARGET_NAME: "Yang Wang"
+          TARGET_EMAIL: "danrtsey.wy@alibaba-inc.com"
+        run: |
+          echo "==> Creating branch '$TARGET_BRANCH' from '$SOURCE_BRANCH'..."
+          git checkout -b "$TARGET_BRANCH"
+
+          echo "==> Rewriting all commit authors and adding Co-authored-by trailers..."
+          FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch -f \
+            --env-filter "
+              export GIT_AUTHOR_NAME='$TARGET_NAME'
+              export GIT_AUTHOR_EMAIL='$TARGET_EMAIL'
+              export GIT_COMMITTER_NAME='$TARGET_NAME'
+              export GIT_COMMITTER_EMAIL='$TARGET_EMAIL'
+            " \
+            --msg-filter "$(pwd)/scripts/rewrite-commit-msg.sh" \
+            HEAD
+
+          echo "==> Verifying rewritten history..."
+          git log --format="%H %ae %an %s" | head -5
+
+      - name: Push the rewritten branch
+        env:
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+        run: |
+          if git ls-remote --exit-code --heads origin "$TARGET_BRANCH" > /dev/null 2>&1; then
+            git push origin "$TARGET_BRANCH" --force-with-lease
+          else
+            git push -u origin "$TARGET_BRANCH"
+          fi
+          echo "✅ Branch '$TARGET_BRANCH' pushed successfully."
+          echo ""
+          echo "All commits now have:"
+          echo "  Author:  Yang Wang <danrtsey.wy@alibaba-inc.com>"
+          echo "  Trailer: Co-authored-by: Copilot <198982749+Copilot@users.noreply.github.com>"

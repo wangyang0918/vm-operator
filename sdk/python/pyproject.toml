@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vm-operator-sdk"
+dynamic = ["version"]
+description = "Python SDK for the vm-operator Kubernetes operator (Firecracker MicroVM sandboxes)"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.8"
+keywords = ["kubernetes", "firecracker", "microvm", "sandbox", "ai-agent", "code-interpreter"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Systems Administration",
+]
+# Core install has no third-party runtime dependencies – only the standard library.
+dependencies = []
+
+[project.optional-dependencies]
+async = ["aiohttp>=3.9"]
+kubeconfig = ["PyYAML>=6.0"]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.23",
+    "aiohttp>=3.9",
+    "PyYAML>=6.0",
+    "responses>=0.25",
+]
+
+[project.urls]
+Homepage = "https://github.com/wangyang0918/vm-operator"
+Repository = "https://github.com/wangyang0918/vm-operator"
+"Bug Tracker" = "https://github.com/wangyang0918/vm-operator/issues"
+
+[tool.setuptools.dynamic]
+version = { attr = "vm_operator_sdk._version.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vm_operator_sdk*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

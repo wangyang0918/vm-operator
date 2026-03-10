@@ -1,0 +1,13 @@
+
+[async]
+aiohttp>=3.9
+
+[dev]
+pytest>=7.0
+pytest-asyncio>=0.23
+aiohttp>=3.9
+PyYAML>=6.0
+responses>=0.25
+
+[kubeconfig]
+PyYAML>=6.0

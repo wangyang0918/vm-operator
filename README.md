@@ -120,6 +120,37 @@ The NetworkPolicy is owned by the Sandbox CR and is garbage-collected automatica
 ### Roadmap (future)
 
 - Horizontal Pod Autoscaler integration for launcher Pods
+- **Python SDK** – pip-installable `vm-operator-sdk` package with sync/async clients for AI Agent and code-interpreter usage (HTTP RESTful API under the hood)
+- **VM Warm Pool** – pre-started pool of MicroVMs for fast SDK allocation and lower response latency
+- **CR-based pool allocation** – consume pooled VMs directly via a `SandboxPool` CustomResource
+
+### P2 – Python SDK 🚧
+
+A pip-installable `vm-operator-sdk` package is available under [`sdk/python/`](sdk/python/README.md).
+It wraps the Kubernetes REST API and exposes a Pythonic interface suitable for AI Agent and
+code-interpreter backends.
+
+**Install:**
+```bash
+pip install vm-operator-sdk            # sync client (no extra deps)
+pip install "vm-operator-sdk[async]"   # + aiohttp for async client
+```
+
+**Example:**
+```python
+import vm_operator_sdk as sdk
+
+auth = sdk.from_kubeconfig()
+
+with sdk.SandboxClient(auth) as client:
+    sandbox = client.create_and_wait(
+        "my-sandbox", template_id="ubuntu-22.04", vcpu=2, memory_mb=512
+    )
+    print(sandbox.status.phase)   # SandboxPhase.RUNNING
+    client.delete("my-sandbox")
+```
+
+See [`sdk/python/README.md`](sdk/python/README.md) for the full API reference, async examples, batch operations and error-handling guide.
 
 ## Resource Isolation
 
@@ -690,3 +721,6 @@ Error: `spec.paused: Forbidden: cannot pause sandbox in phase "Pending"; sandbox
 - **P1** ✅ Sandbox metrics (Prometheus)
 - **P3** ✅ Webhook validation for Sandbox spec
 - **P3** ✅ Network policy per-sandbox isolation
+- **P2** 🚧 Python SDK (`vm-operator-sdk`) – sync/async HTTP client for AI Agent and code-interpreter integration
+- **P2** VM Warm Pool – pre-started MicroVM pool for fast SDK allocation and lower response latency
+- **P2** CR-based pool allocation – `SandboxPool` CustomResource to consume pooled VMs declaratively

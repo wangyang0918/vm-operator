@@ -1,0 +1,32 @@
+Metadata-Version: 2.4
+Name: vm-operator-sdk
+Version: 0.1.0
+Summary: Python SDK for the vm-operator Kubernetes operator (Firecracker MicroVM sandboxes)
+License: Apache-2.0
+Project-URL: Homepage, https://github.com/wangyang0918/vm-operator
+Project-URL: Repository, https://github.com/wangyang0918/vm-operator
+Project-URL: Bug Tracker, https://github.com/wangyang0918/vm-operator/issues
+Keywords: kubernetes,firecracker,microvm,sandbox,ai-agent,code-interpreter
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Classifier: Topic :: System :: Systems Administration
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Provides-Extra: async
+Requires-Dist: aiohttp>=3.9; extra == "async"
+Provides-Extra: kubeconfig
+Requires-Dist: PyYAML>=6.0; extra == "kubeconfig"
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23; extra == "dev"
+Requires-Dist: aiohttp>=3.9; extra == "dev"
+Requires-Dist: PyYAML>=6.0; extra == "dev"
+Requires-Dist: responses>=0.25; extra == "dev"

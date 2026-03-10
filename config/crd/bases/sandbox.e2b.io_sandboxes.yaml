@@ -57,6 +57,21 @@ spec:
                     format: int64
                     type: integer
                 type: object
+              networkPolicy:
+                description: NetworkPolicy defines the network isolation configuration
+                  for the launcher Pod.
+                properties:
+                  isolationPolicy:
+                    default: None
+                    description: |-
+                      IsolationPolicy controls the network isolation mode for the launcher Pod.
+                      None (default): no NetworkPolicy is created.
+                      Default: a NetworkPolicy is created that denies ingress from other sandbox launcher Pods.
+                    enum:
+                    - None
+                    - Default
+                    type: string
+                type: object
               resources:
                 description: Resources defines the compute resources for the MicroVM.
                 properties:

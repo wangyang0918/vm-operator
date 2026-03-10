@@ -6,6 +6,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,6 +41,7 @@ const (
 // +kubebuilder:rbac:groups=sandbox.e2b.io,resources=sandboxes/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 type SandboxReconciler struct {
 	client.Client
 	Scheme  *runtime.Scheme
@@ -51,6 +53,7 @@ func (r *SandboxReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&sandboxv1alpha1.Sandbox{}).
 		Owns(&corev1.Pod{}).
+		Owns(&networkingv1.NetworkPolicy{}).
 		Complete(r)
 }
 
@@ -79,6 +82,11 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 		// Set phase to Pending after adding finalizer.
 		return r.setPhasePending(ctx, sandbox)
+	}
+
+	// Ensure the NetworkPolicy is in sync with the current spec.
+	if err := r.ensureNetworkPolicy(ctx, sandbox); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// Route to the appropriate phase handler.

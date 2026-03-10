@@ -102,6 +102,28 @@ type SchedulingSpec struct {
 	NodeName string `json:"nodeName,omitempty"`
 }
 
+// NetworkPolicyIsolation defines the isolation mode for a Sandbox's launcher Pod.
+// +kubebuilder:validation:Enum=None;Default
+type NetworkPolicyIsolation string
+
+const (
+	// NetworkPolicyIsolationNone means no NetworkPolicy is created; all traffic is allowed (default).
+	NetworkPolicyIsolationNone NetworkPolicyIsolation = "None"
+	// NetworkPolicyIsolationDefault creates a NetworkPolicy that denies ingress from other sandbox
+	// launcher Pods while allowing all other ingress and all egress.
+	NetworkPolicyIsolationDefault NetworkPolicyIsolation = "Default"
+)
+
+// NetworkPolicySpec defines the network isolation configuration for a Sandbox's launcher Pod.
+type NetworkPolicySpec struct {
+	// IsolationPolicy controls the network isolation mode for the launcher Pod.
+	// None (default): no NetworkPolicy is created.
+	// Default: a NetworkPolicy is created that denies ingress from other sandbox launcher Pods.
+	// +kubebuilder:default=None
+	// +optional
+	IsolationPolicy NetworkPolicyIsolation `json:"isolationPolicy,omitempty"`
+}
+
 // SandboxSpec defines the desired state of Sandbox.
 type SandboxSpec struct {
 	// Template contains the template information.
@@ -123,6 +145,10 @@ type SandboxSpec struct {
 	// Scheduling defines scheduling constraints.
 	// +optional
 	Scheduling SchedulingSpec `json:"scheduling,omitempty"`
+
+	// NetworkPolicy defines the network isolation configuration for the launcher Pod.
+	// +optional
+	NetworkPolicy NetworkPolicySpec `json:"networkPolicy,omitempty"`
 
 	// SandboxMetadata is user-defined metadata attached to the sandbox.
 	// +optional

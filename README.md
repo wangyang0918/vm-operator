@@ -48,6 +48,7 @@ Each Sandbox runs in its own dedicated Pod. Resource isolation is enforced at tw
 
 1. **Pod level**: Kubernetes sets CPU and memory `Requests = Limits` on the container, preventing the launcher process from consuming more resources than allocated.
 2. **VM level**: The `sandbox-launcher` passes the same vCPU count and memory size to Firecracker, so the guest OS sees exactly the resources specified in the `Sandbox.spec.resources` field.
+3. **Network level**: When `spec.networkPolicy.isolationPolicy: Default` is set, a Kubernetes NetworkPolicy prevents other sandbox launcher Pods from sending traffic to this sandbox's launcher Pod.
 
 The `/dev/kvm` device is bind-mounted into the launcher container via a `HostPath` volume. The launcher container currently uses `securityContext.privileged: true` to access this device. This is a known trade-off: future versions aim to restrict access to only `/dev/kvm` using device-plugin-based allocation or specific Linux capabilities, removing the need for full privileged mode.
 
@@ -105,11 +106,20 @@ Running ──► Pausing ──► Paused ──► Resuming ──► Initiali
 
 The operator includes a `ValidatingWebhook` for the Sandbox CRD that enforces business rules at admission time, before any controller logic runs. See [Admission Webhook](#admission-webhook) for full details and setup instructions.
 
-### P3 – Roadmap (future)
+### P3 – Network Policy Per-Sandbox Isolation ✅
 
-- Multi-cluster support
+Each Sandbox can opt into network isolation by setting `spec.networkPolicy.isolationPolicy: Default`. When enabled, the operator creates a Kubernetes `NetworkPolicy` named `sbx-netpol-{sandbox-name}` that:
+
+- Selects the sandbox's launcher Pod.
+- Denies ingress traffic from other sandbox launcher Pods (preventing cross-sandbox communication).
+- Allows ingress from all non-launcher Pods (e.g. metrics scrapers, API gateway).
+- Allows all egress.
+
+The NetworkPolicy is owned by the Sandbox CR and is garbage-collected automatically when the Sandbox is deleted. See [Network Policy Isolation](#network-policy-isolation) for configuration details.
+
+### Roadmap (future)
+
 - Horizontal Pod Autoscaler integration for launcher Pods
-- Network policy per-sandbox isolation
 
 ## Resource Isolation
 
@@ -136,7 +146,50 @@ Sandbox spec.resources.memoryMB = 512
 
 Enable `spec.resources.hugePages: true` to have the launcher configure Firecracker with huge-page-backed guest memory for reduced TLB pressure on memory-intensive workloads.
 
-## Sandbox CRD API Reference
+## Network Policy Isolation
+
+By default, no Kubernetes `NetworkPolicy` is created for a Sandbox. All network traffic is unrestricted at the Kubernetes layer (Firecracker still provides hypervisor-level isolation).
+
+When `spec.networkPolicy.isolationPolicy: Default` is set, the operator creates a `NetworkPolicy` named `sbx-netpol-{sandbox-name}` in the same namespace as the Sandbox. This policy:
+
+- **Selects** only the launcher Pod for that specific sandbox (matched by `sandbox.e2b.io/sandbox-name`).
+- **Allows ingress** from pods that are **not** other sandbox launcher Pods (i.e., services, monitoring, gateways).
+- **Allows ingress** from the sandbox's own launcher Pod (same-sandbox traffic).
+- **Denies ingress** from all other sandbox launcher Pods (those with `sandbox.e2b.io/role=launcher` and a different `sandbox.e2b.io/sandbox-name`).
+- **Allows all egress** (no restrictions on outbound traffic).
+
+The `NetworkPolicy` is owned by the Sandbox CR and is garbage-collected automatically when the Sandbox is deleted.
+
+### Configuration
+
+```yaml
+apiVersion: sandbox.e2b.io/v1alpha1
+kind: Sandbox
+metadata:
+  name: isolated-sandbox
+  namespace: default
+spec:
+  template:
+    templateID: "ubuntu-22.04"
+  resources:
+    vcpu: 2
+    memoryMB: 512
+  networkPolicy:
+    isolationPolicy: Default   # Deny ingress from other sandbox launcher Pods
+```
+
+To disable isolation after it was enabled, set `isolationPolicy: None` (or remove the field). The operator will delete the existing `NetworkPolicy`.
+
+### Isolation Values
+
+| `isolationPolicy` | Behavior |
+|---|---|
+| `None` (default) | No `NetworkPolicy` is created; all traffic is allowed. |
+| `Default` | Creates a `NetworkPolicy` denying ingress from other sandbox launcher Pods. |
+
+> **Note**: Network policy enforcement requires a CNI plugin that supports `NetworkPolicy` (e.g., Calico, Cilium, Weave Net). If your cluster does not have a policy-enforcing CNI, the `NetworkPolicy` object is created but has no effect.
+
+
 
 **Group / Version / Kind:** `sandbox.e2b.io/v1alpha1 / Sandbox`  
 **Short name:** `sbx`  
@@ -157,6 +210,7 @@ Enable `spec.resources.hugePages: true` to have the launcher configure Firecrack
 | `spec.lifecycle.timeoutSeconds` | integer | `300` | | Max sandbox lifetime; 0 = no timeout |
 | `spec.scheduling.nodeSelector` | map[string]string | — | | Key-value node labels for scheduling |
 | `spec.scheduling.nodeName` | string | — | | Pin to a specific node by name |
+| `spec.networkPolicy.isolationPolicy` | string | `None` | | Network isolation mode: `None` (no policy) or `Default` (deny ingress from other sandboxes) |
 | `spec.sandboxMetadata` | map[string]string | — | | Arbitrary user-defined metadata (owner, project, etc.) |
 | `spec.paused` | bool | `false` | | Set to `true` to pause (snapshot) the sandbox; clear to resume |
 
@@ -493,7 +547,7 @@ A: Any node that exposes `/dev/kvm`. This includes bare-metal servers with hardw
 A: The launcher container currently runs with `securityContext.privileged: true` to access `/dev/kvm`. This grants broader host access than strictly necessary; a future improvement is to restrict it using a device plugin or specific Linux capabilities (`CAP_SYS_ADMIN`). The operator pod itself (`vm-operator-controller-manager`) does **not** require privileged access.
 
 **Q: How is sandbox isolation enforced?**  
-A: Isolation operates at three layers: (1) Firecracker hypervisor isolation between guest and host, (2) Kubernetes Pod isolation (cgroups, namespaces) between launcher processes, and (3) Pod resource limits that prevent a single sandbox from consuming more CPU or memory than specified in `spec.resources`.
+A: Isolation operates at four layers: (1) Firecracker hypervisor isolation between guest and host, (2) Kubernetes Pod isolation (cgroups, namespaces) between launcher processes, (3) Pod resource limits that prevent a single sandbox from consuming more CPU or memory than specified in `spec.resources`, and (4) optional Kubernetes NetworkPolicy (`spec.networkPolicy.isolationPolicy: Default`) that blocks ingress from other sandbox launcher Pods at the network level.
 
 **Q: What happens when a sandbox times out?**  
 A: The operator transitions the sandbox to `Killing`, deletes the launcher Pod, and removes the finalizer, which allows the CR to be garbage-collected. The timeout is configured via `spec.lifecycle.timeoutSeconds`.
@@ -635,5 +689,4 @@ Error: `spec.paused: Forbidden: cannot pause sandbox in phase "Pending"; sandbox
 - **P1** ✅ Pause / Resume with VM snapshot support
 - **P1** ✅ Sandbox metrics (Prometheus)
 - **P3** ✅ Webhook validation for Sandbox spec
-- **P3** Multi-cluster support
-- **P3** Network policy per-sandbox isolation
+- **P3** ✅ Network policy per-sandbox isolation

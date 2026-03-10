@@ -38,6 +38,7 @@ from .exceptions import (
     APIError,
     AuthenticationError,
     InvalidSpecError,
+    PoolExhaustedError,
     SandboxAlreadyExistsError,
     SandboxNotFoundError,
     TimeoutError,
@@ -56,6 +57,7 @@ from .models import (
     SchedulingSpec,
     TemplateSpec,
 )
+from .pool import AsyncSandboxPool, SandboxPool
 
 __all__ = [
     # version
@@ -68,6 +70,9 @@ __all__ = [
     # clients
     "SandboxClient",
     "AsyncSandboxClient",
+    # pool managers
+    "SandboxPool",
+    "AsyncSandboxPool",
     # models
     "Sandbox",
     "SandboxSpec",
@@ -88,4 +93,5 @@ __all__ = [
     "APIError",
     "TimeoutError",
     "InvalidSpecError",
+    "PoolExhaustedError",
 ]

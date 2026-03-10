@@ -248,6 +248,47 @@ class AsyncSandboxClient:
             raise SandboxNotFoundError(name, ns)
         return Sandbox.from_manifest(raw)
 
+    async def patch_labels(
+        self,
+        name: str,
+        labels: Dict[str, str],
+        *,
+        namespace: Optional[str] = None,
+    ) -> Sandbox:
+        """Merge-patch the Kubernetes labels on a Sandbox.
+
+        Parameters
+        ----------
+        name:
+            Name of the Sandbox to patch.
+        labels:
+            Labels to set (merged with the existing label map).
+        namespace:
+            Namespace of the Sandbox.  Defaults to ``default_namespace``.
+
+        Returns
+        -------
+        Sandbox
+            The updated Sandbox as returned by the API server.
+
+        Raises
+        ------
+        SandboxNotFoundError
+            If the Sandbox does not exist.
+        """
+        ns = namespace or self._default_namespace
+        patch = {"metadata": {"labels": labels}}
+        try:
+            raw = await self._request(
+                "PATCH",
+                self._url(ns, name),
+                body=patch,
+                content_type="application/merge-patch+json",
+            )
+        except SandboxNotFoundError:
+            raise SandboxNotFoundError(name, ns)
+        return Sandbox.from_manifest(raw)
+
     # ------------------------------------------------------------------
     # Convenience / high-level operations
     # ------------------------------------------------------------------

@@ -175,6 +175,98 @@ except sdk.VMOperatorError as e:
     print(f"SDK error: {e}")
 ```
 
+## VM Pooling
+
+The SDK ships with a built-in pool manager that solves a key limitation of
+talking directly to the Kubernetes APIServer: because the APIServer has no concept
+of "idle" vs "in-use" VMs, every `create` call spins up a brand-new MicroVM and
+waits for it to boot – which can take tens of seconds.
+
+`SandboxPool` (sync) and `AsyncSandboxPool` (async) pre-create a set of
+Sandboxes and track their state with Kubernetes labels:
+
+| Label | Values |
+|---|---|
+| `vm-operator/pool` | pool name – identifies pool members |
+| `vm-operator/pool-state` | `idle` (available) or `in-use` (checked out) |
+
+When a caller calls `acquire()`, the pool lists all Sandboxes that are
+`idle` **and** in `Running` phase, claims the first one (by patching the
+label to `in-use`), and returns it immediately – no boot wait.  When done,
+`release()` patches the label back to `idle` so the next caller can use it.
+
+### Synchronous pool
+
+```python
+import vm_operator_sdk as sdk
+
+auth = sdk.from_kubeconfig()
+
+with sdk.SandboxClient(auth) as client:
+    pool = sdk.SandboxPool(
+        client,
+        pool_name="my-pool",   # unique identifier; used as a Kubernetes label value
+        size=5,                # target number of idle VMs
+        template_id="ubuntu-22.04",
+        vcpu=2,
+        memory_mb=512,
+    )
+
+    # Pre-warm the pool: create 5 idle VMs and wait until all are Running
+    pool.replenish()
+
+    # Acquire a running VM instantly (no boot latency)
+    with pool.acquire_context() as sandbox:
+        print(sandbox.name, sandbox.phase)  # SandboxPhase.RUNNING
+        # ... submit work to the sandbox ...
+    # sandbox is returned to the pool automatically
+
+    # Inspect pool state
+    print(len(pool.idle_sandboxes()))   # VMs available for acquisition
+    print(len(pool.in_use_sandboxes())) # VMs currently checked out
+
+    # Shut down the pool when no longer needed
+    pool.drain()
+```
+
+### Asynchronous pool
+
+```python
+import asyncio
+import vm_operator_sdk as sdk
+
+async def main():
+    auth = sdk.from_kubeconfig()
+    async with sdk.AsyncSandboxClient(auth) as client:
+        pool = sdk.AsyncSandboxPool(
+            client,
+            pool_name="async-pool",
+            size=3,
+            template_id="ubuntu-22.04",
+        )
+
+        await pool.replenish()          # pre-warm concurrently
+
+        async with pool.acquire_context() as sandbox:
+            print(sandbox.name)
+            # ... use sandbox ...
+
+        await pool.drain()
+
+asyncio.run(main())
+```
+
+### Manual acquire / release
+
+```python
+# Without the context-manager helper
+sandbox = pool.acquire()
+try:
+    # ... use sandbox ...
+finally:
+    pool.release(sandbox.name)
+```
+
 ## AI Agent / Code-Interpreter Integration
 
 The SDK is designed to work seamlessly in notebook and AI agent environments:
@@ -217,6 +309,13 @@ with sdk.SandboxClient(auth, default_namespace="agents") as client:
 | `SandboxPhase` | Enum: Pending, Scheduling, Initializing, Running, Pausing, Paused, Resuming, Killing, Failed |
 | `IsolationPolicy` | Enum: `None`, `Default` |
 
+## Pool Classes
+
+| Class | Description |
+|---|---|
+| `SandboxPool` | Synchronous pool of pre-created idle Sandbox VMs |
+| `AsyncSandboxPool` | Asynchronous pool of pre-created idle Sandbox VMs |
+
 ## Exceptions
 
 | Exception | When raised |
@@ -228,6 +327,7 @@ with sdk.SandboxClient(auth, default_namespace="agents") as client:
 | `APIError` | Unexpected Kubernetes API HTTP error (`.status_code`, `.message`) |
 | `TimeoutError` | `wait_until_running` timed out |
 | `InvalidSpecError` | Invalid Sandbox specification |
+| `PoolExhaustedError` | No idle Sandbox available in a pool within `acquire_timeout` (`.pool_name`) |
 
 ## Development
 

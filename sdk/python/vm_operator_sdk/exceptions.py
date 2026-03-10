@@ -44,3 +44,11 @@ class TimeoutError(VMOperatorError):
 
 class InvalidSpecError(VMOperatorError):
     """Raised when an invalid Sandbox specification is provided."""
+
+
+class PoolExhaustedError(VMOperatorError):
+    """Raised when no idle Sandbox is available in a :class:`SandboxPool`."""
+
+    def __init__(self, pool_name: str, message: str = "") -> None:
+        self.pool_name = pool_name
+        super().__init__(message or f"Pool '{pool_name}' is exhausted")
